@@ -1,0 +1,43 @@
+{
+  "exam_name": "eng_ans1_correct",
+  "answers": {
+    "1": "A",
+    "2": "B",
+    "3": "B",
+    "4": "C",
+    "5": "BLANK",
+    "6": "C",
+    "7": "B",
+    "8": "A",
+    "9": "D",
+    "10": "A",
+    "11": "A",
+    "12": "D",
+    "13": "B",
+    "14": "B",
+    "15": "C",
+    "16": "D",
+    "17": "D",
+    "18": "B",
+    "19": "A",
+    "20": "D",
+    "21": "A",
+    "22": "C",
+    "23": "C",
+    "24": "C",
+    "25": "A",
+    "26": "D",
+    "27": "A",
+    "28": "B",
+    "29": "C",
+    "30": "D"
+  },
+  "metadata": {
+    "roll_number": "132013",
+    "set_code": "A",
+    "description": "Correct answers for eng_ans1.jpg OMR sheet",
+    "source": "User provided correct answers",
+    "created_at": "2025-10-07T00:41:44.872383",
+    "total_questions": 30
+  }
+}

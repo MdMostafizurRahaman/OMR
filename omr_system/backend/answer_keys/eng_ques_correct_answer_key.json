@@ -1,0 +1,43 @@
+{
+  "exam_name": "eng_ques_correct",
+  "answers": {
+    "1": "D",
+    "2": "C",
+    "3": "A",
+    "4": "A",
+    "5": "C",
+    "6": "C",
+    "7": "B",
+    "8": "A",
+    "9": "D",
+    "10": "A",
+    "11": "A",
+    "12": "D",
+    "13": "B",
+    "14": "D",
+    "15": "C",
+    "16": "A",
+    "17": "D",
+    "18": "B",
+    "19": "A",
+    "20": "A",
+    "21": "A",
+    "22": "C",
+    "23": "C",
+    "24": "C",
+    "25": "A",
+    "26": "D",
+    "27": "B",
+    "28": "D",
+    "29": "A",
+    "30": "B"
+  },
+  "metadata": {
+    "roll_number": "000000",
+    "set_code": "A",
+    "description": "Correct answers for eng_ques.jpg OMR sheet",
+    "source": "User provided correct answers",
+    "created_at": "2025-10-07T00:41:44.874121",
+    "total_questions": 30
+  }
+}

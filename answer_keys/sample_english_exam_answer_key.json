@@ -1,0 +1,43 @@
+{
+  "exam_name": "Sample_English_Exam",
+  "answers": {
+    "1": "B",
+    "2": "A",
+    "3": "D",
+    "4": "C",
+    "5": "B",
+    "6": "A",
+    "7": "D",
+    "8": "C",
+    "9": "B",
+    "10": "A",
+    "11": "D",
+    "12": "C",
+    "13": "B",
+    "14": "A",
+    "15": "D",
+    "16": "C",
+    "17": "B",
+    "18": "A",
+    "19": "D",
+    "20": "C",
+    "21": "B",
+    "22": "A",
+    "23": "D",
+    "24": "C",
+    "25": "B",
+    "26": "A",
+    "27": "D",
+    "28": "C",
+    "29": "B",
+    "30": "A"
+  },
+  "metadata": {
+    "subject": "English",
+    "exam_date": "2025-09-28",
+    "difficulty": "Hard",
+    "description": "Sample English exam with reverse pattern distribution",
+    "created_at": "2025-10-07T00:34:51.342329",
+    "total_questions": 30
+  }
+}
