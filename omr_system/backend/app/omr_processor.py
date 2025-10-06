@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+from .universal_omr_detector_new import UniversalOMRDetector
+from .bangladeshi_omr_detector import BangladeshiOMRDetector
 import re
 import json
 from typing import Dict, List, Optional
@@ -40,62 +42,101 @@ class OMRProcessor:
         self.tesseract_available = TESSERACT_AVAILABLE
         self.smart_detector = SmartOMRDetector()
         self.visual_detector = VisualOMRDetector()
+        self.universal_detector = UniversalOMRDetector()
+        self.bangladeshi_detector = BangladeshiOMRDetector()
     
     def process_omr(self, file_path: str) -> Dict:
         """
-        Process OMR sheet and extract data
-        Returns dictionary with extracted information
+        Process OMR sheet using dynamic detection optimized for 25 questions
         """
         try:
-            # Load image
+            # Load and validate image
             image = cv2.imread(file_path)
             if image is None:
                 raise ValueError("Could not load image")
+                
+            # Enhance image for better detection
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            enhanced = cv2.GaussianBlur(gray, (3, 3), 0)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(enhanced)
             
             print(f"Processing OMR file: {file_path}")
             print(f"Image shape: {image.shape}")
             
-            # Extract text using OCR
-            text_data = self.extract_text(image)
+            # Use enhanced image for text extraction
+            text_data = self.extract_text(enhanced)
             print(f"Extracted text data: {text_data}")
             
-            # Extract roll number and set code from the returned dict
+            # Extract roll number and set code with better accuracy
             roll_number = text_data.get('roll_number', '')
-            set_code = text_data.get('set_code', 'A')
+            set_code = text_data.get('set_code', 'A')  # Default to A for 25-question format
             
             print(f"Detected roll number: {roll_number}")
             print(f"Detected set code: {set_code}")
             
-            # Try the new visual detector first (best for your OMR format)
-            print("Trying visual OMR detection...")
-            answers = self.visual_detector.process_omr(file_path)
+            # Configure detector for 25 questions - try Bangladeshi detector first
+            print("Using Bangladeshi OMR detector optimized for 25 questions...")
             
-            # If visual detector doesn't get enough answers, try smart detector
-            if not answers or len(answers) < 80:
+            # Try Bangladeshi detector first (best for 25-question format)
+            answers = self.bangladeshi_detector.detect_omr_answers(file_path)
+            
+            print(f"Bangladeshi detection result: {len(answers)} answers found")
+            
+            # If Bangladeshi detector fails, try final detector
+            if not answers or len(answers) < 15:  # Need at least 15 answers for 25 questions
+                print("Bangladeshi detection insufficient, trying final detector...")
+                try:
+                    from .final_omr_detector import FinalOMRDetector
+                    final_detector = FinalOMRDetector(debug_mode=True)
+                    answers = final_detector.process(file_path)
+                    print(f"Final detector result: {len(answers)} answers found")
+                except ImportError as ie:
+                    print(f"Final detector import failed: {ie}")
+                    answers = {}
+                except Exception as e:
+                    print(f"Final detector failed: {e}")
+                    answers = {}
+            
+            # If still insufficient, try universal detector
+            if not answers or len(answers) < 10:
+                print("Final detection insufficient, trying universal detector...")
+                
+                # Pre-process image for better detection
+                processed = cv2.adaptiveThreshold(
+                    enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                    cv2.THRESH_BINARY_INV, 11, 2
+                )
+                
+                # Save enhanced image temporarily
+                import os
+                temp_path = os.path.join(os.path.dirname(file_path), "temp_enhanced.jpg")
+                cv2.imwrite(temp_path, processed)
+                
+                # Use enhanced image for detection
+                answers = self.universal_detector.detect_omr_answers(temp_path)
+                try:
+                    os.remove(temp_path)  # Clean up
+                except:
+                    pass
+            
+            print(f"Enhanced/Universal detection result: {len(answers)} answers found")
+            
+            # If still no answers, try visual detector
+            if not answers or len(answers) < 10:
+                print("Universal detector insufficient, trying visual detector...")
+                try:
+                    answers = self.visual_detector.process_omr(file_path)
+                except:
+                    answers = {}
+            
+            # If still no answers, try smart detector
+            if not answers or len(answers) < 5:
                 print("Visual detector insufficient, trying smart detector...")
-                answers = self.smart_detector.process_omr(file_path)
-            
-            # If still not enough answers, try fallback methods
-            if not answers or len(answers) < 50:
-                print("Smart detector failed, trying fallback methods...")
-                
-                # Preprocess image
-                processed_image = self.preprocess_image(image)
-                
-                # Method 1: Template-based detection
-                print("Trying template-based detection...")
-                answers = self.extract_answers_from_bubbles(processed_image)
-                
-                # Method 2: Try with original image if first method fails
-                if not answers:
-                    print("Trying with original image...")
-                    answers = self.extract_answers_from_bubbles(image)
-                
-                # Method 3: Try with different preprocessing
-                if not answers:
-                    print("Trying alternative preprocessing...")
-                    alt_processed = self.alternative_preprocessing(image)
-                    answers = self.extract_answers_from_bubbles(alt_processed)
+                try:
+                    answers = self.smart_detector.process_omr(file_path)
+                except:
+                    answers = {}
             
             print(f"Final extracted answers: {len(answers)} answers found")
             
@@ -103,12 +144,15 @@ class OMRProcessor:
             if not answers:
                 answers = {}
             
+            # Don't auto-assign roll number if it's empty
+            final_roll = "" if not roll_number else roll_number
+            
             return {
-                'roll_number': roll_number,
+                'roll_number': final_roll,
                 'set_code': set_code,
                 'answers': answers,
                 'total_answers': len(answers),
-                'processing_method': 'visual_detector' if len(answers) >= 80 else ('smart_detector' if len(answers) >= 50 else 'fallback')
+                'processing_method': 'bangladeshi_detection'
             }
             
         except Exception as e:
@@ -173,12 +217,17 @@ class OMRProcessor:
         try:
             height, width = gray.shape
             
-            # Focus on top-left area where roll number section is
-            roll_area = gray[0:int(height*0.3), 0:int(width*0.4)]
+            # Focus on top-left area where roll number section should be
+            roll_area = gray[0:int(height*0.2), 0:int(width*0.3)]
             
             # Apply preprocessing for bubble detection
             blurred = cv2.GaussianBlur(roll_area, (3, 3), 0)
-            _, binary = cv2.threshold(blurred, 120, 255, cv2.THRESH_BINARY_INV)
+            
+            # Try different thresholds for light images
+            if np.mean(roll_area) > 200:  # Light image
+                _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            else:
+                _, binary = cv2.threshold(blurred, 120, 255, cv2.THRESH_BINARY_INV)
             
             # Find contours of filled bubbles
             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -189,11 +238,11 @@ class OMRProcessor:
                 area = cv2.contourArea(contour)
                 
                 # Look for small circular bubbles (digit bubbles are smaller)
-                if 20 < area < 200:
+                if 10 < area < 300:  # Broader range for different image types
                     x, y, w, h = cv2.boundingRect(contour)
                     aspect_ratio = float(w) / h
                     
-                    if 0.6 <= aspect_ratio <= 1.4:
+                    if 0.4 <= aspect_ratio <= 2.5:  # More lenient aspect ratio
                         filled_digit_bubbles.append({
                             'x': x + w//2,
                             'y': y + h//2,
@@ -202,7 +251,10 @@ class OMRProcessor:
                         })
             
             if len(filled_digit_bubbles) == 0:
+                print("No digit bubbles found for roll number")
                 return ""
+            
+            print(f"Found {len(filled_digit_bubbles)} potential digit bubbles")
             
             # Sort bubbles by position (left to right for columns, top to bottom for digits)
             filled_digit_bubbles.sort(key=lambda b: (b['x'], b['y']))
@@ -216,7 +268,7 @@ class OMRProcessor:
                 
                 for bubble in filled_digit_bubbles:
                     # If x difference is significant, it's a new column
-                    if abs(bubble['x'] - last_x) > 30:
+                    if abs(bubble['x'] - last_x) > 20:  # Reduced threshold
                         if current_column:
                             columns.append(current_column)
                         current_column = [bubble]
@@ -227,25 +279,57 @@ class OMRProcessor:
                 if current_column:
                     columns.append(current_column)
             
+            print(f"Organized into {len(columns)} digit columns")
+            
+            # If no clear columns found, return empty
+            if len(columns) == 0:
+                return ""
+            
             # Extract digits from each column
             roll_digits = []
             
-            for col in columns:
+            for col_idx, col in enumerate(columns):
                 # Sort by y-coordinate to get digit order (0 at top, 9 at bottom)
                 col.sort(key=lambda b: b['y'])
                 
                 # Find the filled bubble (darkest) in this column
-                if len(col) > 0:
-                    # For now, take the first one (you may need to improve this)
-                    # In a proper implementation, you'd check which bubble is actually filled
-                    digit_position = min(len(col) - 1, 9)  # Ensure it's 0-9
-                    roll_digits.append(str(digit_position))
+                best_bubble = None
+                best_intensity = 255
+                
+                for i, bubble in enumerate(col):
+                    x, y = bubble['x'], bubble['y']
+                    roi_size = 3  # Small sampling area
+                    x1 = max(0, x - roi_size)
+                    y1 = max(0, y - roi_size)
+                    x2 = min(roll_area.shape[1], x + roi_size)
+                    y2 = min(roll_area.shape[0], y + roi_size)
+                    
+                    roi = roll_area[y1:y2, x1:x2]
+                    if roi.size > 0:
+                        mean_intensity = np.mean(roi)
+                        if mean_intensity < best_intensity:
+                            best_intensity = mean_intensity
+                            best_bubble = (i, bubble)
+                
+                # If we found a filled bubble, add the digit
+                if best_bubble and best_intensity < 180:  # Threshold for filled
+                    digit_position, bubble_info = best_bubble
+                    if digit_position < 10:  # Valid digit (0-9)
+                        roll_digits.append(str(digit_position))
+                        print(f"Column {col_idx}: digit {digit_position} (intensity: {best_intensity:.1f})")
             
-            roll_number = ''.join(roll_digits) if roll_digits else ""
-            print(f"Extracted roll number: {roll_number}")
+            roll_number = ''.join(roll_digits) if len(roll_digits) >= 3 else ""  # Need at least 3 digits
+            print(f"Final extracted roll number: '{roll_number}'")
             
             return roll_number
             
+        except Exception as e:
+            print(f"Roll number extraction error: {e}")
+            return ""
+            
+        except Exception as e:
+            print(f"Roll number extraction error: {e}")
+            return ""
         except Exception as e:
             print(f"Roll number extraction error: {e}")
             return ""
@@ -387,106 +471,411 @@ class OMRProcessor:
         return None
     
     def extract_answers_from_bubbles(self, image) -> Dict[str, str]:
-        """TEMPLATE-BASED OMR EXTRACTION - Designed for exact Bengali OMR layout"""
+        """Dynamic OMR detection that adapts to actual question count"""
         try:
-            # Convert to grayscale
             if len(image.shape) == 3:
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                debug_image = image.copy()
             else:
                 gray = image.copy()
-            
+                debug_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
             height, width = gray.shape
-            print(f"Processing image: {width}x{height}")
+            print(f"Dynamic OMR detection: {width}x{height}")
             
-            # Based on your OMR images, create a precise template for bubble locations
-            # Your OMR has specific coordinates where bubbles should be
+            # First, detect actual bubble layout
+            print("Step 1: Detecting actual bubble layout...")
+            bubble_positions = self.detect_actual_bubbles(gray)
             
-            # Skip header area - answer section starts around 30% down
-            answer_start_y = int(height * 0.30)
-            answer_end_y = int(height * 0.95)  # Leave some bottom margin
+            if not bubble_positions:
+                print("No bubbles detected, falling back to grid detection")
+                return self.grid_fallback_detection(gray, debug_image)
             
-            answer_height = answer_end_y - answer_start_y
+            print(f"Found {len(bubble_positions)} bubble positions")
             
-            # Your OMR has 4 main columns for question groups
-            # Column 1: Questions 1-25, Column 2: 26-50, Column 3: 51-75, Column 4: 76-100
+            # Group bubbles into questions
+            questions = self.group_bubbles_into_questions(bubble_positions)
+            print(f"Organized into {len(questions)} questions")
             
+            # Extract answers from each question
             answers = {}
-            
-            # Define the approximate layout based on your OMR format
-            questions_per_column = 25
-            options_per_question = 4  # A, B, C, D
-            
-            # Calculate spacing
-            column_width = width // 4
-            row_height = answer_height // questions_per_column
-            
-            print(f"Grid: {column_width}x{row_height} per cell")
-            
-            for col in range(4):  # 4 columns
-                for row in range(questions_per_column):  # 25 questions per column
-                    question_num = (col * questions_per_column) + row + 1
+            for question_num, bubble_group in questions.items():
+                if len(bubble_group) >= 4:  # Should have A, B, C, D
+                    # Sort by X position for A, B, C, D order
+                    bubble_group.sort(key=lambda b: b['x'])
                     
-                    if question_num > 100:
-                        break
+                    bubble_scores = []
+                    for opt_idx, bubble in enumerate(bubble_group[:4]):
+                        option_letter = chr(65 + opt_idx)  # A, B, C, D
+                        
+                        # Sample around bubble position
+                        x, y = bubble['x'], bubble['y']
+                        intensity_score = self.calculate_bubble_intensity(gray, x, y)
+                        
+                        bubble_scores.append((option_letter, intensity_score, x, y))
+                        
+                        # Debug visualization
+                        color = (0, 255, 0) if intensity_score < 100 else (0, 0, 255)
+                        cv2.circle(debug_image, (x, y), 5, color, 2)
                     
-                    # Calculate base position for this question
-                    base_x = col * column_width
-                    base_y = answer_start_y + (row * row_height)
-                    
-                    # Within each question area, find the 4 option bubbles (A, B, C, D)
-                    option_width = column_width // 4
-                    
-                    best_option = None
-                    min_intensity = 255  # Start with white (highest intensity)
-                    
-                    for option in range(4):  # A, B, C, D
-                        option_letter = chr(65 + option)
+                    # Find darkest (filled) bubble
+                    if bubble_scores:
+                        bubble_scores.sort(key=lambda x: x[1])  # Sort by intensity
+                        best = bubble_scores[0]
+                        second_best = bubble_scores[1] if len(bubble_scores) > 1 else None
                         
-                        # Calculate bubble center position
-                        bubble_x = base_x + (option * option_width) + (option_width // 2)
-                        bubble_y = base_y + (row_height // 2)
+                        filled_option, intensity, bubble_x, bubble_y = best
+                        intensity_diff = second_best[1] - best[1] if second_best else 50
                         
-                        # Define a small region around the expected bubble location
-                        bubble_size = min(20, option_width // 3, row_height // 3)
+                        # Determine if bubble is filled
+                        is_filled = (
+                            intensity < 90 or  # Lower threshold for dark bubbles
+                            (intensity < 130 and intensity_diff > 20) or  # Moderate dark with good separation
+                            (intensity < 150 and intensity_diff > 40)     # Light but with excellent separation
+                        )
                         
-                        x_start = max(0, bubble_x - bubble_size)
-                        x_end = min(width, bubble_x + bubble_size)
-                        y_start = max(0, bubble_y - bubble_size)
-                        y_end = min(height, bubble_y + bubble_size)
-                        
-                        # Extract the region where the bubble should be
-                        roi = gray[y_start:y_end, x_start:x_end]
-                        
-                        if roi.size > 0:
-                            # Calculate average intensity in this region
-                            avg_intensity = np.mean(roi)
+                        if is_filled:
+                            answers[str(question_num)] = filled_option
+                            print(f"✓ Q{question_num}: {filled_option} (intensity={intensity:.1f}, diff={intensity_diff:.1f})")
                             
-                            # Also check minimum intensity to catch dark filled bubbles
-                            min_pixel = np.min(roi)
-                            
-                            # Combined score - lower is more likely to be filled
-                            fill_score = (avg_intensity * 0.7) + (min_pixel * 0.3)
-                            
-                            print(f"Q{question_num}{option_letter}: pos({bubble_x},{bubble_y}) score={fill_score:.1f}")
-                            
-                            # Track the darkest (most likely filled) bubble
-                            if fill_score < min_intensity:
-                                min_intensity = fill_score
-                                best_option = option_letter
-                    
-                    # Only record an answer if we found a significantly darker bubble
-                    if best_option and min_intensity < 140:  # Threshold for filled bubble
-                        answers[str(question_num)] = best_option
-                        print(f"✓ Q{question_num}: {best_option} (score: {min_intensity:.1f})")
+                            # Mark answer on debug
+                            cv2.circle(debug_image, (bubble_x, bubble_y), 8, (0, 255, 0), 3)
+                            cv2.putText(debug_image, f"Q{question_num}:{filled_option}", 
+                                      (bubble_x - 15, bubble_y - 10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
             
-            print(f"Extracted {len(answers)} answers using template matching")
+            # Save debug image
+            try:
+                debug_path = "d:/OMR/omr_system/backend/debug_dynamic_detection.jpg"
+                cv2.imwrite(debug_path, debug_image)
+                print(f"Debug image saved to: {debug_path}")
+            except:
+                pass
+            
+            print(f"DYNAMIC DETECTION: Found {len(answers)} answers for {len(questions)} questions")
             return answers
             
         except Exception as e:
-            print(f"Template matching error: {e}")
+            print(f"Dynamic detection error: {e}")
             import traceback
             traceback.print_exc()
             return {}
+    
+    def detect_actual_bubbles(self, gray):
+        """Detect actual bubble positions in the OMR"""
+        height, width = gray.shape
+        
+        # Enhanced preprocessing
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # Use multiple thresholding methods
+        _, binary1 = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        adaptive = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+        
+        # Combine thresholds
+        combined = cv2.bitwise_or(binary1, adaptive)
+        
+        # Morphological operations
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        cleaned = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours
+        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        bubbles = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            
+            # Filter by area - bubbles should be reasonably sized
+            if 30 < area < 800:
+                x, y, w, h = cv2.boundingRect(contour)
+                
+                # Filter by aspect ratio
+                aspect_ratio = float(w) / h
+                if 0.4 <= aspect_ratio <= 2.5:
+                    
+                    # Check circularity
+                    perimeter = cv2.arcLength(contour, True)
+                    if perimeter > 0:
+                        circularity = 4 * np.pi * area / (perimeter * perimeter)
+                        
+                        if circularity > 0.3:  # Reasonably circular
+                            center_x = x + w // 2
+                            center_y = y + h // 2
+                            
+                            # Only consider bubbles in answer area
+                            if center_y > height * 0.25:
+                                bubbles.append({
+                                    'x': center_x,
+                                    'y': center_y,
+                                    'w': w,
+                                    'h': h,
+                                    'area': area,
+                                    'circularity': circularity
+                                })
+        
+        return bubbles
+    
+    def group_bubbles_into_questions(self, bubbles):
+        """Group detected bubbles into questions"""
+        if not bubbles:
+            return {}
+        
+        # Sort bubbles by Y coordinate to group into rows
+        bubbles.sort(key=lambda b: b['y'])
+        
+        # Group bubbles into rows
+        rows = []
+        current_row = []
+        last_y = bubbles[0]['y']
+        
+        for bubble in bubbles:
+            # If Y difference is significant, start new row
+            if abs(bubble['y'] - last_y) > 20:  # Row threshold
+                if len(current_row) >= 3:  # Valid row should have multiple bubbles
+                    rows.append(sorted(current_row, key=lambda b: b['x']))
+                current_row = [bubble]
+                last_y = bubble['y']
+            else:
+                current_row.append(bubble)
+        
+        # Add last row
+        if len(current_row) >= 3:
+            rows.append(sorted(current_row, key=lambda b: b['x']))
+        
+        # Map rows to questions
+        questions = {}
+        for row_idx, row in enumerate(rows):
+            question_num = row_idx + 1
+            questions[question_num] = row
+        
+        return questions
+    
+    def calculate_bubble_intensity(self, gray, x, y):
+        """Calculate intensity score for a bubble at given position"""
+        height, width = gray.shape
+        
+        # Sample in multiple sizes for robustness
+        scores = []
+        for radius in [4, 6, 8, 10]:
+            x1 = max(0, x - radius)
+            x2 = min(width, x + radius)
+            y1 = max(0, y - radius)
+            y2 = min(height, y + radius)
+            
+            roi = gray[y1:y2, x1:x2]
+            if roi.size > 0:
+                avg_intensity = np.mean(roi)
+                min_intensity = np.min(roi)
+                
+                # Count very dark pixels
+                very_dark_ratio = np.sum(roi < 80) / roi.size
+                
+                # Combined score
+                score = avg_intensity * 0.6 + min_intensity * 0.4 - (very_dark_ratio * 50)
+                scores.append(score)
+        
+        return np.mean(scores) if scores else 255
+    
+    def grid_fallback_detection(self, gray, debug_image):
+        """Fallback grid detection for difficult cases"""
+        print("Using grid fallback detection...")
+        height, width = gray.shape
+        answers = {}
+        
+        # Prioritize 25-question layouts for this OMR format
+        possible_layouts = [
+            {"cols": 1, "questions_per_col": 25},  # 25 questions in 1 column
+            {"cols": 2, "questions_per_col": 13},  # ~25 questions in 2 columns
+            {"cols": 3, "questions_per_col": 9},   # ~25 questions in 3 columns
+            {"cols": 5, "questions_per_col": 5}    # 25 questions in 5 columns
+        ]
+        
+        best_layout = None
+        max_answers = 0
+        
+        for layout in possible_layouts:
+            layout_answers = self.try_grid_layout(gray, layout)
+            if len(layout_answers) > max_answers:
+                max_answers = len(layout_answers)
+                best_layout = layout_answers
+        
+        return best_layout if best_layout else {}
+    
+    def try_grid_layout(self, gray, layout):
+        """Try a specific grid layout"""
+        height, width = gray.shape
+        answers = {}
+        
+        cols = layout["cols"]
+        questions_per_col = layout["questions_per_col"]
+        
+        answer_start_y = int(height * 0.25)
+        answer_end_y = int(height * 0.95)
+        answer_height = answer_end_y - answer_start_y
+        
+        col_width = width // cols
+        
+        for col in range(cols):
+            for row in range(questions_per_col):
+                question_num = (col * questions_per_col) + row + 1
+                
+                base_x = col * col_width
+                base_y = answer_start_y + int((row + 0.5) * (answer_height / questions_per_col))
+                
+                option_width = col_width // 4
+                
+                bubble_scores = []
+                for option in range(4):
+                    option_letter = chr(65 + option)
+                    option_x = base_x + int((option + 0.5) * option_width)
+                    
+                    intensity = self.calculate_bubble_intensity(gray, option_x, base_y)
+                    bubble_scores.append((option_letter, intensity))
+                
+                if bubble_scores:
+                    bubble_scores.sort(key=lambda x: x[1])
+                    best = bubble_scores[0]
+                    
+                    if best[1] < 140:  # More lenient threshold for filled bubbles
+                        answers[str(question_num)] = best[0]
+        
+        return answers
+    
+    def ultra_aggressive_detection(self, gray, debug_image):
+        """Ultra-aggressive detection for stubborn OMR sheets"""
+        print("Using ultra-aggressive bubble detection...")
+        
+        height, width = gray.shape
+        answers = {}
+        
+        # Strict grid with multiple sampling points
+        answer_start_y = int(height * 0.26)
+        answer_end_y = int(height * 0.97)
+        answer_height = answer_end_y - answer_start_y
+        
+        # 4 columns, 25 questions each
+        col_boundaries = [
+            int(width * 0.05),   # Start of column 1
+            int(width * 0.28),   # Start of column 2  
+            int(width * 0.51),   # Start of column 3
+            int(width * 0.74),   # Start of column 4
+            int(width * 0.97)    # End of column 4
+        ]
+        
+        for col_idx in range(4):
+            col_start = col_boundaries[col_idx]
+            col_end = col_boundaries[col_idx + 1]
+            col_width = col_end - col_start
+            
+            for row in range(25):
+                question_num = (col_idx * 25) + row + 1
+                if question_num > 100:
+                    break
+                
+                # Calculate row position
+                row_y = answer_start_y + int((row + 0.5) * (answer_height / 25))
+                
+                option_scores = []
+                
+                # Sample 4 options across the column width
+                for opt in range(4):
+                    opt_x = col_start + int((opt + 0.5) * (col_width / 4))
+                    
+                    # Sample multiple points around expected position
+                    min_score = 255
+                    
+                    for dx in range(-8, 9, 4):
+                        for dy in range(-8, 9, 4):
+                            sample_x = max(0, min(width-1, opt_x + dx))
+                            sample_y = max(0, min(height-1, row_y + dy))
+                            
+                            # Sample in small region
+                            roi_size = 3
+                            x1 = max(0, sample_x - roi_size)
+                            x2 = min(width, sample_x + roi_size)
+                            y1 = max(0, sample_y - roi_size)
+                            y2 = min(height, sample_y + roi_size)
+                            
+                            roi = gray[y1:y2, x1:x2]
+                            if roi.size > 0:
+                                avg_intensity = np.mean(roi)
+                                min_score = min(min_score, avg_intensity)
+                    
+                    option_letter = chr(65 + opt)
+                    option_scores.append((option_letter, min_score, opt_x, row_y))
+                
+                # Find darkest option
+                if option_scores:
+                    option_scores.sort(key=lambda x: x[1])
+                    best_option, best_score, best_x, best_y = option_scores[0]
+                    
+                    # Very aggressive threshold
+                    if best_score < 140:
+                        answers[str(question_num)] = best_option
+                        print(f"✓ ULTRA Q{question_num}: {best_option} (score={best_score:.1f})")
+                        
+                        # Mark on debug image
+                        cv2.circle(debug_image, (best_x, best_y), 10, (255, 0, 255), 2)
+        
+        return answers
+    
+    def fallback_grid_detection(self, gray, debug_image):
+        """Fallback method using aggressive grid detection"""
+        print("Using fallback grid detection method...")
+        height, width = gray.shape
+        answers = {}
+        
+        # Divide into strict grid
+        answer_start_y = int(height * 0.32)
+        answer_end_y = int(height * 0.94)
+        answer_height = answer_end_y - answer_start_y
+        
+        # 4 columns, 25 rows each
+        col_width = width // 4
+        row_height = answer_height // 25
+        
+        for col in range(4):
+            for row in range(25):
+                question_num = (col * 25) + row + 1
+                if question_num > 100:
+                    break
+                
+                base_x = col * col_width
+                base_y = answer_start_y + (row * row_height)
+                option_width = col_width // 4
+                
+                bubble_scores = []
+                
+                for option in range(4):
+                    option_letter = chr(65 + option)
+                    center_x = base_x + (option * option_width) + (option_width // 2)
+                    center_y = base_y + (row_height // 2)
+                    
+                    # Multiple ROI sizes to catch different bubble sizes
+                    for roi_size in [8, 12, 16]:
+                        x1, x2 = max(0, center_x - roi_size), min(width, center_x + roi_size)
+                        y1, y2 = max(0, center_y - roi_size), min(height, center_y + roi_size)
+                        
+                        roi = gray[y1:y2, x1:x2]
+                        if roi.size > 0:
+                            avg_intensity = np.mean(roi)
+                            dark_ratio = np.sum(roi < 100) / roi.size
+                            score = avg_intensity - (dark_ratio * 80)
+                            bubble_scores.append((option_letter, score, roi_size))
+                            break
+                
+                if bubble_scores:
+                    bubble_scores.sort(key=lambda x: x[1])
+                    best_option, best_score, best_size = bubble_scores[0]
+                    
+                    # Very aggressive threshold
+                    if best_score < 130:
+                        answers[str(question_num)] = best_option
+                        print(f"✓ FALLBACK Q{question_num}: {best_option} (score={best_score:.1f})")
+        
+        return answers
     
     def extract_answers_from_text(self, text: str) -> Dict[str, str]:
         """Fallback: Extract answers from OCR text"""

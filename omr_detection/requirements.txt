@@ -1,0 +1,22 @@
+# OMR Detection System Requirements
+
+# Core image processing
+opencv-python>=4.8.0
+numpy>=1.21.0
+Pillow>=9.0.0
+
+# GUI for calibration tool
+tkinter  # Usually comes with Python
+
+# Data handling
+pandas>=1.3.0
+matplotlib>=3.5.0
+
+# JSON handling (built-in)
+json
+
+# File operations (built-in)
+os
+datetime
+typing
+collections

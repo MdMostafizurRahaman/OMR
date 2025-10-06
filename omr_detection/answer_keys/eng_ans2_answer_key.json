@@ -1,0 +1,43 @@
+{
+  "exam_name": "eng_ans2",
+  "answers": {
+    "1": "D",
+    "2": "C",
+    "3": "A",
+    "4": "D",
+    "5": "BLANK",
+    "6": "C",
+    "7": "B",
+    "8": "A",
+    "9": "D",
+    "10": "A",
+    "11": "A",
+    "12": "D",
+    "13": "B",
+    "14": "C",
+    "15": "C",
+    "16": "D",
+    "17": "D",
+    "18": "B",
+    "19": "A",
+    "20": "BLANK",
+    "21": "A",
+    "22": "C",
+    "23": "C",
+    "24": "C",
+    "25": "A",
+    "26": "D",
+    "27": "BLANK",
+    "28": "BLANK",
+    "29": "BLANK",
+    "30": "BLANK"
+  },
+  "metadata": {
+    "roll_number": "132713",
+    "set_code": "A",
+    "image_file": "eng_ans2.jpg",
+    "description": "Answer key for eng_ans2.jpg - Student roll 132713",
+    "created_at": "2025-09-28T23:56:34.542447",
+    "total_questions": 30
+  }
+}
